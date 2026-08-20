@@ -157,23 +157,6 @@ npm run test:integration -- http://127.0.0.1:3214
 
 It verifies administrator authentication, device approval, authenticated chunks, SHA-256, share limits/revocation, ZIP output, message reply/reaction/recall, and backup download. GitHub Actions runs this sequence automatically.
 
-## Publishing to GitHub
-
-Install [GitHub CLI](https://cli.github.com/) and complete its browser-based sign-in:
-
-```powershell
-gh auth login
-```
-
-After confirming that every image under `docs/images/` contains fictional demo data, one command runs the publication scan, type check, production build, initial commit, public repository creation, push, topic setup, and private vulnerability reporting setup. `-PublishRelease` also pushes the `v1.1.0` tag, which triggers the Windows portable Release workflow.
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-github.ps1 `
-  -Repository "YOUR-ACCOUNT/loadchat" -PublishRelease
-```
-
-The script cannot add files excluded by `.gitignore`, including `data/`, `.env`, certificates, logs, temporary directories, build output, and old release archives. Do not use `-SkipScreenshotCheck` for a public release; it exists only for internal repositories without screenshots.
-
 ## Known boundaries
 
 - Transfers currently pass through the LoadChat server. WebRTC signaling exists for future peer-to-peer transport, but files do not yet switch to a direct data channel.
