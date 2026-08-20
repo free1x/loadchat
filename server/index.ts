@@ -569,6 +569,12 @@ app.get('/api/admin/settings', requireAdmin, (req, res) => res.json(publicConfig
 app.patch('/api/admin/settings', requireAdmin, (req, res) => {
   const previousPort = config.port
   const patch: Record<string, unknown> = {}
+  if (typeof req.body.newPassword === 'string' && req.body.newPassword.length > 0 && req.body.newPassword.length < 8) {
+    return res.status(400).json({ error: '访问密码至少需要 8 个字符' })
+  }
+  if (typeof req.body.newAdminPassword === 'string' && req.body.newAdminPassword.length > 0 && req.body.newAdminPassword.length < 10) {
+    return res.status(400).json({ error: '管理员密码至少需要 10 个字符' })
+  }
   if (typeof req.body.serverName === 'string' && req.body.serverName.trim()) patch.serverName = req.body.serverName.trim().slice(0, 50)
   if (Number.isInteger(req.body.port) && req.body.port >= 1024 && req.body.port <= 65535) patch.port = req.body.port
   if (typeof req.body.storagePath === 'string' && path.isAbsolute(req.body.storagePath)) patch.storagePath = path.resolve(req.body.storagePath)

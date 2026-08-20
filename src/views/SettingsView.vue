@@ -24,6 +24,7 @@ const avatarInput = ref<HTMLInputElement>()
 const restoreInput = ref<HTMLInputElement>()
 const adminReady = ref(false)
 const adminError = ref('')
+const adminSuccess = ref('')
 const adminPassword = ref('')
 const adminBusy = ref(false)
 const managedDevices = ref<ManagedDevice[]>([])
@@ -31,6 +32,9 @@ const backups = ref<BackupInfo[]>([])
 const auditLogs = ref<AuditEntry[]>([])
 const backupBusy = ref(false)
 const currentOrigin = window.location.origin
+const adminPasswordEnabled = computed(() => Boolean(state.bootstrap?.adminPasswordEnabled))
+const isLoopbackOrigin = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname.replace(/^\[|\]$/g, '').toLowerCase())
+const localAdminUrl = computed(() => `${window.location.protocol}//localhost:${state.bootstrap?.port || window.location.port || 3210}/#/settings`)
 const pendingDevices = computed(() => managedDevices.value.filter((device) => !device.approved && !device.blocked))
 
 function assignConfig(config: any) {
@@ -66,15 +70,35 @@ onMounted(() => {
 })
 
 async function unlockAdmin() {
-  if (adminPassword.value.length < (state.bootstrap?.adminPasswordEnabled ? 1 : 10)) return
-  adminBusy.value = true; adminError.value = ''
+  const isSetup = !adminPasswordEnabled.value
+  adminError.value = ''; adminSuccess.value = ''
+  if (!adminPassword.value) {
+    adminError.value = isSetup ? '请输入至少 10 位的新管理员密码' : '请输入管理员密码'
+    return false
+  }
+  if (isSetup && adminPassword.value.length < 10) {
+    adminError.value = '管理员密码至少需要 10 个字符'
+    return false
+  }
+  if (isSetup && !isLoopbackOrigin) {
+    adminError.value = `首次设置只能在运行 LoadChat 的电脑上完成，请打开 ${localAdminUrl.value}`
+    return false
+  }
+  adminBusy.value = true
   try {
-    const path = state.bootstrap?.adminPasswordEnabled ? '/api/admin/auth' : '/api/admin/setup'
+    const path = isSetup ? '/api/admin/setup' : '/api/admin/auth'
     const result = await api<{ token: string }>(path, { method: 'POST', body: JSON.stringify({ password: adminPassword.value }) })
     setAdminToken(result.token); adminPassword.value = ''
     if (state.bootstrap) { state.bootstrap.adminPasswordEnabled = true; state.bootstrap.adminLocalSetup = false }
     await loadAdmin()
-  } catch (value) { adminError.value = value instanceof Error ? value.message : '管理员验证失败' }
+    if (!adminReady.value) return false
+    adminSuccess.value = isSetup ? '管理员密码设置成功，管理功能已解锁。' : '管理员验证成功，管理功能已解锁。'
+    window.setTimeout(() => { adminSuccess.value = '' }, 4000)
+    return true
+  } catch (value) {
+    adminError.value = value instanceof Error ? value.message : (isSetup ? '管理员密码设置失败' : '管理员验证失败')
+    return false
+  }
   finally { adminBusy.value = false }
 }
 
@@ -82,7 +106,13 @@ async function saveAll() {
   saving.value = true; error.value = ''; saved.value = false
   try {
     identity.nickname = identity.nickname.trim() || '局域网用户'; saveProfile()
-    if (adminReady.value) {
+    if ((!adminReady.value || !adminPasswordEnabled.value) && adminPassword.value) {
+      const unlocked = await unlockAdmin()
+      if (!unlocked) throw new Error(adminError.value || '请先完成管理员验证')
+    }
+    if (adminReady.value && adminPasswordEnabled.value) {
+      if (form.newPassword && form.newPassword.length < 8) throw new Error('访问密码至少需要 8 个字符')
+      if (form.newAdminPassword && form.newAdminPassword.length < 10) throw new Error('管理员密码至少需要 10 个字符')
       const result = await api<any>('/api/admin/settings', { method: 'PATCH', body: JSON.stringify({
         serverName: form.serverName, port: Number(form.port), storagePath: form.storagePath,
         retentionDays: Number(form.retentionDays), allowedCidrs: form.allowedCidrs.split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
@@ -96,6 +126,8 @@ async function saveAll() {
       }) })
       restart.value = result.restartRequired
       if (state.bootstrap) Object.assign(state.bootstrap, result)
+    } else {
+      adminSuccess.value = adminPasswordEnabled.value ? '个人资料已保存；服务器设置需要先验证管理员密码。' : '个人资料已保存；服务器设置需要先设置管理员密码。'
     }
     saved.value = true; form.newPassword = ''; form.newAdminPassword = ''; form.clearPassword = false
     window.setTimeout(() => { saved.value = false }, 2200)
@@ -148,7 +180,7 @@ function avatarPicked(event: Event) {
 <template>
   <div class="page-scroll settings-page">
     <header class="page-heading"><div><span class="eyebrow">控制中心 · Control center</span><h1>设置</h1><p>管理身份、存储、安全策略和本地备份。</p></div><button class="primary-btn" :disabled="saving" @click="saveAll"><component :is="saved ? Check : Save" :size="17" />{{ saved ? '已保存' : saving ? '保存中' : '保存更改' }}</button></header>
-    <div v-if="error || restart" class="notice" :class="{ error }"><RefreshCw :size="17" /><span>{{ error || '配置或数据库恢复已更新，请重启 LoadChat 后完全生效。' }}</span></div>
+    <div v-if="error || restart || adminSuccess" class="notice" :class="{ error }"><component :is="error ? Activity : adminSuccess ? Check : RefreshCw" :size="17" /><span>{{ error || adminSuccess || '配置或数据库恢复已更新，请重启 LoadChat 后完全生效。' }}</span></div>
 
     <div class="settings-grid">
       <main class="settings-main">
@@ -162,12 +194,14 @@ function avatarPicked(event: Event) {
           <div class="form-grid"><label class="field"><span>主题</span><select :value="theme" @change="applyTheme(($event.target as HTMLSelectElement).value as ThemePreference)"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><label class="field"><span>语言</span><select :value="locale" @change="setLocale(($event.target as HTMLSelectElement).value as LocalePreference)"><option value="zh-CN">简体中文</option><option value="en">English（逐步完善）</option></select></label></div>
         </section>
 
-        <section v-if="!adminReady" class="settings-card admin-lock">
-          <div class="card-title"><span class="setting-icon green"><ShieldPlus :size="19" /></span><div><h2>{{ state.bootstrap?.adminPasswordEnabled ? '管理员验证' : '设置管理员密码' }}</h2><p>服务器配置、设备审批和备份仅管理员可用</p></div></div>
-          <form class="unlock-row" @submit.prevent="unlockAdmin"><label class="field"><span>{{ state.bootstrap?.adminPasswordEnabled ? '管理员密码' : '新管理员密码（至少 10 位）' }}</span><input v-model="adminPassword" type="password" autocomplete="current-password" /></label><button class="primary-btn" :disabled="adminBusy">{{ adminBusy ? '验证中' : '解锁管理' }}</button></form><small class="error-text">{{ adminError }}</small>
+        <section v-if="!adminPasswordEnabled || !adminReady" class="settings-card admin-lock">
+          <div class="card-title"><span class="setting-icon green"><ShieldPlus :size="19" /></span><div><h2>{{ adminPasswordEnabled ? '管理员验证' : '设置管理员密码' }}</h2><p>{{ adminPasswordEnabled ? '验证后可管理服务器配置、设备审批和备份' : '首次设置完成后会立即解锁管理功能' }}</p></div></div>
+          <form class="unlock-row" novalidate @submit.prevent="unlockAdmin"><label class="field"><span>{{ adminPasswordEnabled ? '管理员密码' : '新管理员密码（至少 10 位）' }}</span><input v-model="adminPassword" type="password" :autocomplete="adminPasswordEnabled ? 'current-password' : 'new-password'" :minlength="adminPasswordEnabled ? 1 : 10" required /></label><button class="primary-btn" :disabled="adminBusy">{{ adminBusy ? (adminPasswordEnabled ? '验证中' : '设置中') : (adminPasswordEnabled ? '验证并解锁' : '设置并进入管理') }}</button></form>
+          <small v-if="!adminPasswordEnabled && !isLoopbackOrigin" class="setup-hint">为防止局域网其他设备抢先接管，首次设置请在运行 LoadChat 的电脑打开 <code>{{ localAdminUrl }}</code>。</small>
+          <small v-if="adminError" class="error-text">{{ adminError }}</small>
         </section>
 
-        <template v-else>
+        <template v-if="adminReady && adminPasswordEnabled">
           <section class="settings-card">
             <div class="card-title"><span class="setting-icon blue"><Server :size="19" /></span><div><h2>服务器与容量</h2><p>服务地址、文件位置和磁盘保护</p></div></div>
             <div class="form-grid"><label class="field"><span>服务名称</span><input v-model="form.serverName" /></label><label class="field"><span>端口</span><input v-model.number="form.port" type="number" min="1024" max="65535" /></label><label class="field wide"><span>文件存储路径</span><div class="input-icon"><HardDrive :size="16" /><input v-model="form.storagePath" /></div></label><label class="field"><span>历史保留天数</span><input v-model.number="form.retentionDays" type="number" min="0" max="3650" /></label><label class="field"><span>单文件上限（GiB）</span><input v-model.number="form.maxFileSizeGb" type="number" min="0.001" /></label><label class="field"><span>总存储配额（GiB）</span><input v-model.number="form.maxStorageSizeGb" type="number" min="0.001" /></label><label class="field"><span>最低剩余空间（GiB）</span><input v-model.number="form.minFreeSpaceGb" type="number" min="0" /></label><label class="field"><span>单设备 24h 上传额度（GiB）</span><input v-model.number="form.maxDailyUploadGb" type="number" min="0.001" /></label><label class="field"><span>单设备并发文件数</span><input v-model.number="form.maxConcurrentUploads" type="number" min="1" max="32" /></label><label class="field"><span>分享最长有效期（天）</span><input v-model.number="form.shareMaxDays" type="number" min="1" max="365" /></label></div>
@@ -206,6 +240,6 @@ function avatarPicked(event: Event) {
 </template>
 
 <style scoped>
-.settings-page{padding:36px 42px 70px}.page-heading{display:flex;justify-content:space-between;align-items:end;margin-bottom:24px}.page-heading h1{font-size:29px;margin:7px 0 4px;letter-spacing:-.04em}.page-heading p{margin:0;color:var(--muted)}.eyebrow{color:var(--primary);font-size:11px;font-weight:700}.notice{padding:11px 14px;display:flex;align-items:center;gap:9px;border-radius:11px;background:#fff7df;color:#8b6500;font-size:11px;margin-bottom:14px}.notice.error{background:#fff0f1;color:var(--danger)}.settings-grid{display:grid;grid-template-columns:minmax(520px,1fr) 285px;gap:18px;align-items:start}.settings-main,.settings-side{display:grid;gap:14px}.settings-card,.side-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:20px}.card-title{display:flex;align-items:center;gap:11px;padding-bottom:17px;border-bottom:1px solid var(--border);margin-bottom:18px}.card-title h2{font-size:14px;margin:0 0 3px}.card-title p{color:var(--muted);font-size:9px;margin:0}.setting-icon{width:37px;height:37px;display:grid;place-items:center;border-radius:12px;flex:0 0 auto}.purple{color:var(--primary);background:var(--purple-soft)}.blue{color:#2d78d2;background:#e8f2ff}.green{color:#009b78;background:#e5f8f2}.orange{color:#d87917;background:#fff1df}.profile-editor{display:flex;gap:22px;align-items:center}.avatar-edit{border:0;background:transparent;position:relative;cursor:pointer;padding:0}.avatar-edit i{position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);background:#24202f;color:white;border-radius:7px;font-size:8px;padding:3px 7px;font-style:normal}.profile-fields{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:11px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 14px}.field{display:grid;gap:6px}.field.wide{grid-column:1/-1}.field>span{font-size:10px;font-weight:700}.field input,.field textarea,.field select{width:100%;border:1px solid var(--border);border-radius:10px;padding:10px 11px;outline:0;font:inherit;color:var(--text);background:var(--surface);font-size:11px;resize:vertical}.field input:focus,.field textarea:focus,.field select:focus{border-color:#bdb4ee;box-shadow:0 0 0 3px rgba(108,92,231,.07)}.input-icon{position:relative}.input-icon svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted)}.input-icon input{padding-left:34px}.toggle-field{display:flex;align-items:center;justify-content:space-between;gap:10px;align-self:end;padding:8px 0;cursor:pointer}.toggle-field>span{display:grid}.toggle-field strong{font-size:10px}.toggle-field small,.managed-list small,.backup-list small{color:var(--muted);font-size:8px;margin-top:3px}.toggle-field input{display:none}.toggle-field i{width:37px;height:21px;border-radius:20px;background:#d9d6df;position:relative;transition:.2s;flex:0 0 auto}.toggle-field i:after{content:'';width:17px;height:17px;background:white;border-radius:50%;position:absolute;left:2px;top:2px;transition:.2s;box-shadow:0 1px 3px #999}.toggle-field input:checked+i{background:var(--primary)}.toggle-field input:checked+i:after{transform:translateX(16px)}.unlock-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end}.error-text{color:var(--danger);font-size:9px}.count-badge{background:var(--danger);color:#fff;border-radius:8px;padding:2px 6px;font-size:8px}.managed-list,.backup-list{display:grid;gap:8px}.managed-list article,.backup-list article{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:12px;padding:10px}.managed-list article>span,.backup-list article>span{display:grid;min-width:0;flex:1}.managed-list strong,.backup-list strong{font-size:10px;overflow:hidden;text-overflow:ellipsis}.managed-list article>i{font-size:8px;font-style:normal;color:var(--success)}.managed-list article>i.pending{color:#c17a00}.managed-list article>i.blocked{color:var(--danger)}.mini-action{border:0;border-radius:8px;padding:6px 8px;font-size:8px;display:flex;align-items:center;gap:4px;cursor:pointer}.mini-action.good{background:#e5f8f2;color:#008c6d}.mini-action.bad{background:#fff0f1;color:var(--danger)}.backup-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.toggle-field.inline{min-width:145px}.tiny-field{width:90px}.backup-list{margin-top:14px}.backup-list>p{text-align:center;color:var(--muted);font-size:10px}.status-card{border-radius:19px;padding:20px}.status-card.dark{color:white;background:linear-gradient(145deg,#1c1925,#30294e)}.status-top{display:flex;justify-content:space-between;align-items:center}.status-top>span{width:37px;height:37px;border-radius:12px;background:rgba(255,255,255,.1);display:grid;place-items:center}.status-top i{font-size:9px;font-style:normal;color:#77dfc3}.status-card h3{margin:16px 0 3px;font-size:16px}.status-card>p{color:#aaa4bd;font-size:9px;margin:0 0 18px;word-break:break-all}.status-line{display:flex;justify-content:space-between;font-size:9px;padding:7px 0;border-top:1px solid rgba(255,255,255,.08);color:#aaa5b7}.status-line b{color:white}.side-card h3{margin:0 0 15px;font-size:12px;display:flex;align-items:center;gap:7px}.disk-bar{height:6px;background:var(--soft);border-radius:6px;overflow:hidden}.disk-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--primary),#a596ff)}.disk-label{display:flex;justify-content:space-between;color:var(--muted);font-size:8px;margin-top:6px}.side-stats{border-top:1px solid var(--border);margin-top:15px;padding-top:13px;display:grid;grid-template-columns:1fr 1fr}.side-stats>span{display:grid}.side-stats small{color:var(--muted);font-size:8px}.links{padding:7px}.links button{display:flex;width:100%;align-items:center;gap:9px;border:0;background:transparent;border-radius:11px;padding:8px;text-align:left;cursor:pointer;color:var(--text)}.links button:hover{background:var(--soft)}.links button>div{display:grid;flex:1}.links strong{font-size:10px}.links small{color:var(--muted);font-size:8px}.links .setting-icon{width:33px;height:33px}.compact-card{padding-bottom:18px}.audit-list{display:grid;gap:7px;max-height:360px;overflow:auto}.audit-list article{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;border:1px solid var(--border);border-radius:11px}.audit-list article>span{display:grid;min-width:0}.audit-list article>span:last-child{text-align:right}.audit-list strong{font-size:10px}.audit-list small,.audit-list time{font-size:8px;color:var(--muted)}.audit-list>p{text-align:center;color:var(--muted);font-size:10px}
+.settings-page{padding:36px 42px 70px}.page-heading{display:flex;justify-content:space-between;align-items:end;margin-bottom:24px}.page-heading h1{font-size:29px;margin:7px 0 4px;letter-spacing:-.04em}.page-heading p{margin:0;color:var(--muted)}.eyebrow{color:var(--primary);font-size:11px;font-weight:700}.notice{padding:11px 14px;display:flex;align-items:center;gap:9px;border-radius:11px;background:#e9f8f2;color:#087a60;font-size:11px;margin-bottom:14px}.notice.error{background:#fff0f1;color:var(--danger)}.settings-grid{display:grid;grid-template-columns:minmax(520px,1fr) 285px;gap:18px;align-items:start}.settings-main,.settings-side{display:grid;gap:14px}.settings-card,.side-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:20px}.card-title{display:flex;align-items:center;gap:11px;padding-bottom:17px;border-bottom:1px solid var(--border);margin-bottom:18px}.card-title h2{font-size:14px;margin:0 0 3px}.card-title p{color:var(--muted);font-size:9px;margin:0}.setting-icon{width:37px;height:37px;display:grid;place-items:center;border-radius:12px;flex:0 0 auto}.purple{color:var(--primary);background:var(--purple-soft)}.blue{color:#2d78d2;background:#e8f2ff}.green{color:#009b78;background:#e5f8f2}.orange{color:#d87917;background:#fff1df}.profile-editor{display:flex;gap:22px;align-items:center}.avatar-edit{border:0;background:transparent;position:relative;cursor:pointer;padding:0}.avatar-edit i{position:absolute;bottom:-2px;left:50%;transform:translateX(-50%);background:#24202f;color:white;border-radius:7px;font-size:8px;padding:3px 7px;font-style:normal}.profile-fields{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:11px}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px 14px}.field{display:grid;gap:6px}.field.wide{grid-column:1/-1}.field>span{font-size:10px;font-weight:700}.field input,.field textarea,.field select{width:100%;border:1px solid var(--border);border-radius:10px;padding:10px 11px;outline:0;font:inherit;color:var(--text);background:var(--surface);font-size:11px;resize:vertical}.field input:focus,.field textarea:focus,.field select:focus{border-color:#bdb4ee;box-shadow:0 0 0 3px rgba(108,92,231,.07)}.input-icon{position:relative}.input-icon svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted)}.input-icon input{padding-left:34px}.toggle-field{display:flex;align-items:center;justify-content:space-between;gap:10px;align-self:end;padding:8px 0;cursor:pointer}.toggle-field>span{display:grid}.toggle-field strong{font-size:10px}.toggle-field small,.managed-list small,.backup-list small{color:var(--muted);font-size:8px;margin-top:3px}.toggle-field input{display:none}.toggle-field i{width:37px;height:21px;border-radius:20px;background:#d9d6df;position:relative;transition:.2s;flex:0 0 auto}.toggle-field i:after{content:'';width:17px;height:17px;background:white;border-radius:50%;position:absolute;left:2px;top:2px;transition:.2s;box-shadow:0 1px 3px #999}.toggle-field input:checked+i{background:var(--primary)}.toggle-field input:checked+i:after{transform:translateX(16px)}.unlock-row{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end}.setup-hint,.error-text{display:block;margin-top:10px;font-size:9px;line-height:1.6}.setup-hint{color:#8b6500}.setup-hint code{user-select:all}.error-text{color:var(--danger)}.count-badge{background:var(--danger);color:#fff;border-radius:8px;padding:2px 6px;font-size:8px}.managed-list,.backup-list{display:grid;gap:8px}.managed-list article,.backup-list article{display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:12px;padding:10px}.managed-list article>span,.backup-list article>span{display:grid;min-width:0;flex:1}.managed-list strong,.backup-list strong{font-size:10px;overflow:hidden;text-overflow:ellipsis}.managed-list article>i{font-size:8px;font-style:normal;color:var(--success)}.managed-list article>i.pending{color:#c17a00}.managed-list article>i.blocked{color:var(--danger)}.mini-action{border:0;border-radius:8px;padding:6px 8px;font-size:8px;display:flex;align-items:center;gap:4px;cursor:pointer}.mini-action.good{background:#e5f8f2;color:#008c6d}.mini-action.bad{background:#fff0f1;color:var(--danger)}.backup-actions{display:flex;gap:8px;align-items:end;flex-wrap:wrap}.toggle-field.inline{min-width:145px}.tiny-field{width:90px}.backup-list{margin-top:14px}.backup-list>p{text-align:center;color:var(--muted);font-size:10px}.status-card{border-radius:19px;padding:20px}.status-card.dark{color:white;background:linear-gradient(145deg,#1c1925,#30294e)}.status-top{display:flex;justify-content:space-between;align-items:center}.status-top>span{width:37px;height:37px;border-radius:12px;background:rgba(255,255,255,.1);display:grid;place-items:center}.status-top i{font-size:9px;font-style:normal;color:#77dfc3}.status-card h3{margin:16px 0 3px;font-size:16px}.status-card>p{color:#aaa4bd;font-size:9px;margin:0 0 18px;word-break:break-all}.status-line{display:flex;justify-content:space-between;font-size:9px;padding:7px 0;border-top:1px solid rgba(255,255,255,.08);color:#aaa5b7}.status-line b{color:white}.side-card h3{margin:0 0 15px;font-size:12px;display:flex;align-items:center;gap:7px}.disk-bar{height:6px;background:var(--soft);border-radius:6px;overflow:hidden}.disk-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--primary),#a596ff)}.disk-label{display:flex;justify-content:space-between;color:var(--muted);font-size:8px;margin-top:6px}.side-stats{border-top:1px solid var(--border);margin-top:15px;padding-top:13px;display:grid;grid-template-columns:1fr 1fr}.side-stats>span{display:grid}.side-stats small{color:var(--muted);font-size:8px}.links{padding:7px}.links button{display:flex;width:100%;align-items:center;gap:9px;border:0;background:transparent;border-radius:11px;padding:8px;text-align:left;cursor:pointer;color:var(--text)}.links button:hover{background:var(--soft)}.links button>div{display:grid;flex:1}.links strong{font-size:10px}.links small{color:var(--muted);font-size:8px}.links .setting-icon{width:33px;height:33px}.compact-card{padding-bottom:18px}.audit-list{display:grid;gap:7px;max-height:360px;overflow:auto}.audit-list article{display:flex;justify-content:space-between;gap:12px;padding:9px 10px;border:1px solid var(--border);border-radius:11px}.audit-list article>span{display:grid;min-width:0}.audit-list article>span:last-child{text-align:right}.audit-list strong{font-size:10px}.audit-list small,.audit-list time{font-size:8px;color:var(--muted)}.audit-list>p{text-align:center;color:var(--muted);font-size:10px}
 @media(max-width:950px){.settings-grid{grid-template-columns:1fr}.settings-side{grid-template-columns:1fr 1fr}.settings-side .links{grid-column:1/-1}}@media(max-width:700px){.settings-page{padding:24px 16px 92px}.page-heading .primary-btn{position:fixed;z-index:30;right:16px;bottom:82px;border-radius:50%;width:48px;height:48px;padding:0;font-size:0}.profile-editor{align-items:flex-start}.profile-fields,.form-grid{grid-template-columns:1fr}.field.wide{grid-column:auto}.settings-side{grid-template-columns:1fr}.settings-side .links{grid-column:auto}.unlock-row{grid-template-columns:1fr}.managed-list article{flex-wrap:wrap}}
 </style>

@@ -2,6 +2,14 @@
 
 All notable changes are documented here. This project follows semantic versioning.
 
+## [1.1.1] - 2026-08-20
+
+### Fixed
+
+- First-time administrator setup now distinguishes localhost bootstrap access from a configured administrator password.
+- Password-length and localhost-only failures now show explicit feedback; the settings header can also complete initial setup.
+- Administrator and access-password updates are validated by both the browser and server instead of being silently ignored.
+
 ## [1.1.0] - 2026-08-19
 
 ### Added
