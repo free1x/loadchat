@@ -1,0 +1,16 @@
+[Unit]
+Description=LoadChat LAN chat and file transfer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/loadchat
+ExecStart=/usr/bin/node /opt/loadchat/dist-server/index.js
+Environment=NODE_ENV=production
+Environment=LOADCHAT_DATA_DIR=/opt/loadchat/data
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

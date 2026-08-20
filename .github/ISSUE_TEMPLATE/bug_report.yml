@@ -1,0 +1,42 @@
+name: Bug report
+description: 报告可复现的问题 / Report a reproducible problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请勿粘贴访问令牌、密码、真实 IP、日志中的个人信息或私密文件名。
+  - type: input
+    id: version
+    attributes:
+      label: LoadChat version
+      placeholder: 1.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Server platform
+      options: [Windows, Linux, macOS, Docker, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述 / Description
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果 / Expected behavior
+  - type: textarea
+    id: environment
+    attributes:
+      label: Browser and network environment

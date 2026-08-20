@@ -1,0 +1,16 @@
+{
+  "name": "LoadChat 局域网互传",
+  "short_name": "LoadChat",
+  "description": "局域网实时聊天与大文件传输",
+  "id": "/",
+  "start_url": "/#home",
+  "scope": "/",
+  "lang": "zh-CN",
+  "categories": ["social", "productivity", "utilities"],
+  "display": "standalone",
+  "background_color": "#f5f4f7",
+  "theme_color": "#6c5ce7",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

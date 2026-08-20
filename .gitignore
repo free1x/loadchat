@@ -1,0 +1,32 @@
+# Dependencies and generated output
+node_modules/
+dist/
+dist-server/
+release/
+.tmp/
+
+# Local runtime data: may contain messages, IPs, password hashes and files
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
+
+# Local configuration, certificates and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs and OS/editor files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

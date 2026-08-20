@@ -1,0 +1,25 @@
+services:
+  loadchat:
+    build: .
+    container_name: loadchat
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      PORT: ${LOADCHAT_PORT:-3210}
+      LOADCHAT_NAME: ${LOADCHAT_NAME:-LoadChat}
+      LOADCHAT_DATA_DIR: /app/data
+      LOADCHAT_PUBLIC_URL: ${LOADCHAT_PUBLIC_URL:-}
+    ports:
+      - "${LOADCHAT_PORT:-3210}:${LOADCHAT_PORT:-3210}"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "if [ -f /app/data/tls/cert.pem ]; then wget --no-check-certificate -q --spider https://127.0.0.1:$${PORT}/api/status; else wget -q --spider http://127.0.0.1:$${PORT}/api/status; fi"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

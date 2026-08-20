@@ -1,0 +1,46 @@
+{
+  "name": "loadchat",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A private LAN chat and resumable file transfer hub.",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"tsx watch server/index.ts\" \"vite --host 0.0.0.0\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite --host 0.0.0.0",
+    "build": "vite build && tsc -p tsconfig.server.json && node scripts/write-build-version.mjs",
+    "start": "node dist-server/index.js",
+    "typecheck": "vue-tsc --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test:integration": "node scripts/v110-smoke.mjs",
+    "check:publication": "node scripts/check-publication.mjs"
+  },
+  "dependencies": {
+    "@vueuse/core": "^13.6.0",
+    "archiver": "^8.0.0",
+    "bonjour-service": "^1.4.4",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "lucide-vue-next": "^0.468.0",
+    "mime-types": "^3.0.1",
+    "qrcode": "^1.5.4",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "vue": "^3.5.18"
+  },
+  "devDependencies": {
+    "@types/archiver": "^8.0.0",
+    "@types/express": "^5.0.3",
+    "@types/mime-types": "^2.1.4",
+    "@types/node": "^22.17.2",
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "concurrently": "^9.2.0",
+    "tsx": "^4.20.4",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.2",
+    "vue-tsc": "^3.0.5"
+  }
+}

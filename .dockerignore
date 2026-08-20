@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-server
+data
+release
+.tmp
+.git
+.github
+.env
+.env.*
+*.log
+*.sqlite*
+*.pem
+*.key
+*.p12
+*.pfx
+npm-debug.log*

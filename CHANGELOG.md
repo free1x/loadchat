@@ -1,0 +1,26 @@
+# Changelog
+
+All notable changes are documented here. This project follows semantic versioning.
+
+## [1.1.0] - 2026-08-19
+
+### Added
+
+- Device approval/blocking and a separate administrator session.
+- Optional ECDH/AES-GCM end-to-end encryption for direct text messages over HTTPS.
+- Reply, reaction, read receipt, recall, message search, and group administration.
+- Upload concurrency/daily/storage/free-space limits and server-side SHA-256 verification.
+- Expiring/revocable share links, download-count limits, folder upload, and ZIP batch download.
+- Consistent SQLite backups, queued restore, audit logs, log rotation, and status metrics.
+- mDNS service announcement plus Windows, systemd, launchd, Docker, and HTTPS setup scripts.
+- Dark/system themes, responsive improvements, and bilingual project/security documentation.
+- In-app full-size image preview in chat and the file center, with a separate original-file download action.
+
+### Security
+
+- Content Security Policy, HTTP and Socket.IO rate limiting, authenticated resumable chunks, and stricter room/file isolation.
+- Repository exclusions for runtime databases, files, secrets, certificates, logs, temporary data, and release artifacts.
+
+### Fixed
+
+- LAN-IP blank page, PowerShell starter parsing, transfer panel overflow, online indicators, message notifications, and composer anchoring.

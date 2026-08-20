@@ -1,0 +1,40 @@
+name: Release Windows portable package
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm prune --omit=dev
+      - name: Assemble portable package
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "LoadChat-Windows-x64"
+          New-Item -ItemType Directory -Path $stage, (Join-Path $stage "runtime") -Force | Out-Null
+          Copy-Item dist, dist-server, node_modules -Destination $stage -Recurse
+          Copy-Item package.json, package-lock.json, PORTABLE-README.txt, LICENSE -Destination $stage
+          Copy-Item scripts/start-portable.cmd -Destination (Join-Path $stage "start-portable.cmd")
+          Copy-Item (Get-Command node).Source -Destination (Join-Path $stage "runtime/node.exe")
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Compress-Archive -Path $stage -DestinationPath "release/LoadChat-Windows-x64-$env:GITHUB_REF_NAME.zip" -CompressionLevel Optimal
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME "release/LoadChat-Windows-x64-$env:GITHUB_REF_NAME.zip" --generate-notes --verify-tag --title "LoadChat $env:GITHUB_REF_NAME"

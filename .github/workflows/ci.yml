@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:publication
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm audit --audit-level=high
+      - name: Integration smoke test
+        shell: bash
+        run: |
+          export PORT=3214
+          export LOADCHAT_DATA_DIR="$RUNNER_TEMP/loadchat-smoke"
+          node dist-server/index.js &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:3214/api/status >/dev/null && break
+            sleep 1
+          done
+          npm run test:integration -- http://127.0.0.1:3214
