@@ -164,23 +164,6 @@ npm run test:integration -- http://127.0.0.1:3214
 
 测试覆盖管理员认证、设备审批、分片鉴权、SHA-256、分享次数/撤销、ZIP、消息回复/回应/撤回和备份下载。GitHub Actions 会自动执行同样的验证。
 
-## 发布到 GitHub
-
-先安装并通过浏览器登录 [GitHub CLI](https://cli.github.com/)：
-
-```powershell
-gh auth login
-```
-
-确认 `docs/images/` 中的发布截图均为虚构演示数据后，一条命令可完成脱敏检查、类型检查、生产构建、首次提交、创建公开仓库、推送、设置 Topics、启用私密漏洞报告，并可推送 `v1.1.0` 标签触发 Windows 便携包 Release：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\publish-github.ps1 `
-  -Repository "你的账号/loadchat" -PublishRelease
-```
-
-脚本不会读取或上传被 `.gitignore` 排除的 `data/`、`.env`、证书、日志、临时目录、构建产物和旧发布包。不要用 `-SkipScreenshotCheck` 发布正式版本；该选项只供没有截图的内部测试仓库使用。
-
 ## 当前边界
 
 - 文件目前通过 LoadChat 服务端中转。项目已具备 WebRTC 信令，但尚未把文件切换为浏览器直连 DataChannel。
