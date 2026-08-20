@@ -18,7 +18,7 @@
     "check:publication": "node scripts/check-publication.mjs"
   },
   "dependencies": {
-    "@vueuse/core": "^13.6.0",
+    "@vueuse/core": "^14.4.0",
     "archiver": "^8.0.0",
     "bonjour-service": "^1.4.4",
     "express": "^5.1.0",
