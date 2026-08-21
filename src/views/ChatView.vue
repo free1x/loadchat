@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { Archive, Check, CheckCheck, Crown, Download, File, FilePlus2, Files, FolderUp, Image, Laugh, LockKeyhole, LockOpen, LogOut, MessageCircle, MoreHorizontal, Paperclip, Plus, Reply, Search, Send, Trash2, UserPlus, Users, Video, X } from 'lucide-vue-next'
+import { Archive, Check, CheckCheck, Crown, Download, File, FilePlus2, Files, FolderUp, Image, Laugh, LockKeyhole, LockOpen, LogOut, MessageCircle, MoreHorizontal, Paperclip, Plus, Reply, Search, Send, Trash2, UserMinus, UserPlus, Users, Video, X } from 'lucide-vue-next'
 import { downloadUrl } from '../api'
 import TransferList from '../components/TransferList.vue'
 import UserAvatar from '../components/UserAvatar.vue'
 import { e2eeSupported, encryptedRooms, setE2eeRoom } from '../e2ee'
-import { activeRoomName, createGroup, dmRoomId, identity, leaveGroup, markRoomRead, onlinePeers, retractMessage, searchMessages, selectRoom, sendMessage, sendTyping, state, toggleReaction, updateGroup } from '../state'
+import { activeRoomName, createGroup, deleteGroup, dmRoomId, identity, leaveGroup, markRoomRead, onlinePeers, retractMessage, searchMessages, selectRoom, sendMessage, sendTyping, state, toggleReaction, updateGroup } from '../state'
 import { enqueueFiles } from '../upload'
 import { fileKind, formatBytes, formatTime } from '../utils'
 import type { ChatMessage, Device, FileInfo } from '../types'
@@ -28,6 +28,10 @@ const messageQuery = ref('')
 const messageResults = ref<ChatMessage[]>([])
 const showRoomManage = ref(false)
 const renameValue = ref('')
+const transferAdminId = ref('')
+const roomManageBusy = ref(false)
+const roomManageError = ref('')
+const roomManageMessage = ref('')
 const previewImage = ref<FileInfo | null>(null)
 let pasteStatusTimer: number | undefined
 
@@ -45,12 +49,22 @@ const activePeer = computed(() => {
 })
 const activeRoom = computed(() => state.rooms.find((room) => room.id === state.activeRoomId))
 const activeIsAdmin = computed(() => Boolean(activeRoom.value?.admins?.includes(identity.id)))
+const transferCandidates = computed(() => activeRoom.value?.members.filter((memberId) => memberId !== identity.id) || [])
+const needsAdminTransfer = computed(() => activeIsAdmin.value && (activeRoom.value?.admins?.length || 0) <= 1 && transferCandidates.value.length > 0)
+const isOnlyGroupMember = computed(() => activeIsAdmin.value && transferCandidates.value.length === 0)
 const e2eeEnabled = computed(() => encryptedRooms.value.includes(state.activeRoomId))
 const e2eeAvailable = computed(() => Boolean(e2eeSupported && activePeer.value?.encryptionPublicKey))
 
 function toggleE2ee() {
   if (!e2eeEnabled.value && !e2eeAvailable.value) return
   setE2eeRoom(state.activeRoomId, !e2eeEnabled.value)
+}
+
+function openRoomManage() {
+  transferAdminId.value = transferCandidates.value[0] || ''
+  roomManageError.value = ''
+  roomManageMessage.value = ''
+  showRoomManage.value = true
 }
 
 watch(() => messages.value.length, async () => {
@@ -105,14 +119,44 @@ function wasRead(message: ChatMessage) {
 async function retract(message: ChatMessage) {
   if (confirm('撤回这条消息？')) await retractMessage(message.id)
 }
+async function runRoomAction(action: () => Promise<unknown>, success: string) {
+  roomManageBusy.value = true
+  roomManageError.value = ''
+  roomManageMessage.value = ''
+  try {
+    await action()
+    roomManageMessage.value = success
+    return true
+  } catch (error) {
+    roomManageError.value = error instanceof Error ? error.message : '群聊操作失败'
+    return false
+  } finally {
+    roomManageBusy.value = false
+  }
+}
 async function renameGroup() {
   if (!renameValue.value.trim()) return
-  await updateGroup(state.activeRoomId, 'rename', { name: renameValue.value.trim() }); renameValue.value = ''
+  if (await runRoomAction(() => updateGroup(state.activeRoomId, 'rename', { name: renameValue.value.trim() }), '群名称已更新')) renameValue.value = ''
 }
-async function addMember(deviceId: string) { await updateGroup(state.activeRoomId, 'add', { deviceId }) }
-async function removeMember(deviceId: string) { if (confirm('将该成员移出群聊？')) await updateGroup(state.activeRoomId, 'remove', { deviceId }) }
-async function promoteMember(deviceId: string) { await updateGroup(state.activeRoomId, 'promote', { deviceId }) }
-async function leaveCurrentGroup() { if (confirm('退出当前群聊？')) { await leaveGroup(state.activeRoomId); showRoomManage.value = false } }
+async function addMember(deviceId: string) { await runRoomAction(() => updateGroup(state.activeRoomId, 'add', { deviceId }), '成员已加入群聊') }
+async function removeMember(deviceId: string) {
+  if (confirm(`将“${deviceName(deviceId)}”移出群聊？`)) await runRoomAction(() => updateGroup(state.activeRoomId, 'remove', { deviceId }), '成员已移出群聊')
+}
+async function promoteMember(deviceId: string) {
+  await runRoomAction(() => updateGroup(state.activeRoomId, 'promote', { deviceId }), `已将“${deviceName(deviceId)}”设为管理员`)
+}
+async function leaveCurrentGroup() {
+  const roomId = state.activeRoomId
+  const successor = needsAdminTransfer.value ? transferAdminId.value : undefined
+  if (needsAdminTransfer.value && !successor) { roomManageError.value = '请选择一位接任管理员'; return }
+  const prompt = successor ? `将管理员移交给“${deviceName(successor)}”并退出群聊？` : '退出当前群聊？'
+  if (confirm(prompt) && await runRoomAction(() => leaveGroup(roomId, successor), '已退出群聊')) showRoomManage.value = false
+}
+async function dissolveCurrentGroup() {
+  const room = activeRoom.value
+  if (!room || !confirm(`确定解散“${room.name}”吗？\n\n所有成员会被移出，群聊记录将删除。群文件不会从磁盘删除，但解散后只有上传者能在文件中心继续访问。`)) return
+  if (await runRoomAction(() => deleteGroup(room.id), '群聊已解散')) showRoomManage.value = false
+}
 function deviceName(id: string) { return state.devices.find((device) => device.id === id)?.nickname || id.slice(0, 8) }
 </script>
 
@@ -141,7 +185,7 @@ function deviceName(id: string) { return state.devices.find((device) => device.i
           <span v-else class="room-avatar"><component :is="state.activeRoomId === 'lobby' ? MessageCircle : Users" :size="18" /></span>
           <div><strong>{{ activeRoomName() }}</strong><small v-if="activePeer"><i /> 在线 · {{ activePeer.ip }}</small><small v-else>{{ activeRoom?.id === 'lobby' ? `${state.devices.length} 台设备已连接` : `${activeRoom?.members.length || 0} 位成员` }}</small></div>
         </div>
-        <div class="head-actions"><button v-if="activePeer" class="icon-btn" :class="{ secure: e2eeEnabled }" :disabled="!e2eeAvailable && !e2eeEnabled" :title="e2eeEnabled ? '关闭后续消息的端到端加密' : e2eeAvailable ? '开启私聊端到端加密' : '端到端加密需要双方使用 HTTPS 访问'" @click="toggleE2ee"><LockKeyhole v-if="e2eeEnabled" :size="17" /><LockOpen v-else :size="17" /></button><button class="icon-btn" title="搜索当前聊天" @click="showMessageSearch = !showMessageSearch"><Search :size="17" /></button><button v-if="activeRoom?.id.startsWith('group:')" class="icon-btn" title="群聊管理" @click="showRoomManage = true"><MoreHorizontal :size="18" /></button></div>
+        <div class="head-actions"><button v-if="activePeer" class="icon-btn" :class="{ secure: e2eeEnabled }" :disabled="!e2eeAvailable && !e2eeEnabled" :title="e2eeEnabled ? '关闭后续消息的端到端加密' : e2eeAvailable ? '开启私聊端到端加密' : '端到端加密需要双方使用 HTTPS 访问'" @click="toggleE2ee"><LockKeyhole v-if="e2eeEnabled" :size="17" /><LockOpen v-else :size="17" /></button><button class="icon-btn" title="搜索当前聊天" @click="showMessageSearch = !showMessageSearch"><Search :size="17" /></button><button v-if="activeRoom?.id.startsWith('group:')" class="icon-btn" title="群聊管理" @click="openRoomManage"><MoreHorizontal :size="18" /></button></div>
       </header>
 
       <form v-if="showMessageSearch" class="message-search-bar" @submit.prevent="runMessageSearch"><Search :size="16" /><input v-model="messageQuery" autofocus placeholder="搜索当前聊天记录（至少 2 个字符）" /><button class="secondary-btn">搜索</button><button type="button" class="icon-btn tiny" @click="showMessageSearch = false"><X :size="14" /></button><div v-if="messageResults.length" class="message-search-results"><button v-for="result in messageResults" :key="result.id" type="button" @click="openSearchResult(result)"><strong>{{ result.senderName }}</strong><span>{{ result.content }}</span><small>{{ formatTime(result.createdAt) }}</small></button></div></form>
@@ -209,10 +253,14 @@ function deviceName(id: string) { return state.devices.find((device) => device.i
 
     <div v-if="showRoomManage && activeRoom" class="modal-backdrop" @click.self="showRoomManage = false">
       <section class="modal group-modal"><button class="modal-close" @click="showRoomManage = false"><X :size="18" /></button><span class="modal-icon"><Users :size="23" /></span><h2>群聊管理</h2><p>{{ activeRoom.name }} · {{ activeRoom.members.length }} 位成员</p>
-        <form v-if="activeIsAdmin" class="rename-row" @submit.prevent="renameGroup"><input v-model="renameValue" maxlength="40" :placeholder="activeRoom.name" /><button class="secondary-btn">重命名</button></form>
-        <div class="member-list manage-members"><article v-for="memberId in activeRoom.members" :key="memberId"><UserAvatar :name="deviceName(memberId)" :size="34" /><span><strong>{{ deviceName(memberId) }}</strong><small>{{ activeRoom.admins?.includes(memberId) ? '管理员' : '成员' }}</small></span><Crown v-if="activeRoom.admins?.includes(memberId)" :size="14" class="crown" /><template v-if="activeIsAdmin && memberId !== identity.id"><button v-if="!activeRoom.admins?.includes(memberId)" title="设为管理员" @click="promoteMember(memberId)"><Crown :size="14" /></button><button title="移出群聊" @click="removeMember(memberId)"><UserPlus :size="14" class="remove-icon" /></button></template></article></div>
-        <div v-if="activeIsAdmin" class="available-members"><small>添加在线成员</small><button v-for="device in onlinePeers.filter((item) => !activeRoom?.members.includes(item.id))" :key="device.id" @click="addMember(device.id)"><UserPlus :size="13" />{{ device.nickname }}</button></div>
-        <button class="danger-wide" @click="leaveCurrentGroup"><LogOut :size="15" />退出群聊</button>
+        <form v-if="activeIsAdmin" class="rename-row" @submit.prevent="renameGroup"><input v-model="renameValue" maxlength="40" :placeholder="activeRoom.name" :disabled="roomManageBusy" /><button class="secondary-btn" :disabled="roomManageBusy">重命名</button></form>
+        <div class="member-list manage-members"><article v-for="memberId in activeRoom.members" :key="memberId"><UserAvatar :name="deviceName(memberId)" :size="34" /><span><strong>{{ deviceName(memberId) }}</strong><small>{{ memberId === identity.id ? '我 · ' : '' }}{{ activeRoom.admins?.includes(memberId) ? '管理员' : '成员' }}</small></span><Crown v-if="activeRoom.admins?.includes(memberId)" :size="14" class="crown" /><template v-if="activeIsAdmin && memberId !== identity.id"><button v-if="!activeRoom.admins?.includes(memberId)" :disabled="roomManageBusy" title="设为管理员" @click="promoteMember(memberId)"><Crown :size="14" /></button><button class="member-remove" :disabled="roomManageBusy" title="移出群聊" @click="removeMember(memberId)"><UserMinus :size="14" /><span>移除</span></button></template></article></div>
+        <div v-if="activeIsAdmin" class="available-members"><small>添加在线成员</small><button v-for="device in onlinePeers.filter((item) => !activeRoom?.members.includes(item.id))" :key="device.id" :disabled="roomManageBusy" @click="addMember(device.id)"><UserPlus :size="13" />{{ device.nickname }}</button></div>
+        <p v-if="roomManageError" class="manage-feedback error">{{ roomManageError }}</p><p v-else-if="roomManageMessage" class="manage-feedback success">{{ roomManageMessage }}</p>
+        <div v-if="needsAdminTransfer" class="transfer-admin"><label><span>移交管理员后退出</span><select v-model="transferAdminId" :disabled="roomManageBusy"><option v-for="memberId in transferCandidates" :key="memberId" :value="memberId">{{ deviceName(memberId) }}</option></select></label><button class="danger-wide" :disabled="roomManageBusy || !transferAdminId" @click="leaveCurrentGroup"><LogOut :size="15" />移交并退出</button></div>
+        <p v-else-if="isOnlyGroupMember" class="manage-hint">群内只有你，无法直接退出，请解散群聊。</p>
+        <button v-else class="danger-wide" :disabled="roomManageBusy" @click="leaveCurrentGroup"><LogOut :size="15" />退出群聊</button>
+        <button v-if="activeIsAdmin" class="dissolve-wide" :disabled="roomManageBusy" @click="dissolveCurrentGroup"><Trash2 :size="15" />解散群聊</button>
       </section>
     </div>
 
@@ -252,7 +300,7 @@ function deviceName(id: string) { return state.devices.find((device) => device.i
 .drop-mini { border: 1px dashed #c8c0ef; border-radius: 14px; background: #f3f0ff; display: flex; align-items: center; gap: 10px; text-align: left; padding: 13px; cursor: pointer; color: var(--text); }.drop-mini > span { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; color: var(--primary); background: white; }.drop-mini > div { display: grid; }.drop-mini strong { font-size: 11px; }.drop-mini small { color: var(--muted); font-size: 9px; margin-top: 2px; }.transfer-title { display: flex; justify-content: space-between; margin: 20px 2px 10px; font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }.transfer-title b { background: var(--soft); padding: 2px 6px; border-radius: 6px; }.privacy-note { margin-top: auto; padding: 12px; display: flex; gap: 9px; background: #eef8f5; color: #087d65; border-radius: 13px; }.privacy-note > div { display: grid; }.privacy-note strong { font-size: 10px; }.privacy-note small { color: #66978d; font-size: 8px; margin-top: 2px; }
 .drag-overlay { position: absolute; inset: 12px; border-radius: 20px; background: rgba(247,245,255,.94); border: 2px dashed var(--primary); z-index: 20; display: grid; place-content: center; justify-items: center; color: var(--primary); pointer-events: none; backdrop-filter: blur(6px); }.drag-overlay span { width: 70px; height: 70px; border-radius: 22px; background: var(--purple-soft); display: grid; place-items: center; }.drag-overlay strong { font-size: 20px; color: var(--text); margin: 15px 0 4px; }.drag-overlay small { color: var(--muted); }
 .group-modal { width: min(420px, calc(100vw - 30px)); }.member-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; margin: 14px 0 18px; }.member-list label { display: flex; align-items: center; gap: 9px; padding: 9px; border-radius: 12px; background: var(--soft); cursor: pointer; }.member-list label > input { display: none; }.member-list label > span { flex: 1; display: grid; }.member-list strong { font-size: 11px; }.member-list small { font-size: 9px; color: var(--muted); }.member-list label > i { width: 17px; height: 17px; border: 1px solid var(--border-strong); border-radius: 6px; }.member-list label:has(input:checked) { background: var(--purple-soft); }.member-list label:has(input:checked) > i { background: var(--primary); border-color: var(--primary); box-shadow: inset 0 0 0 4px var(--primary), inset 0 0 0 5px white; }
-.rename-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }.rename-row input { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; color: var(--text); background: var(--surface); }.manage-members article { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 11px; background: var(--soft); }.manage-members article > span { min-width: 0; flex: 1; display: grid; }.manage-members article button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: var(--surface); cursor: pointer; }.crown { color: #d69b16; }.remove-icon { transform: rotate(45deg); color: var(--danger); }.available-members { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 13px; }.available-members > small { flex-basis: 100%; color: var(--muted); }.available-members button { border: 1px solid var(--border); border-radius: 8px; padding: 5px 7px; background: var(--surface); color: var(--text); display: flex; gap: 4px; cursor: pointer; }.danger-wide { width: 100%; border: 1px solid #ffcdd3; border-radius: 10px; padding: 9px; color: var(--danger); background: #fff5f6; display: flex; justify-content: center; align-items: center; gap: 6px; cursor: pointer; }
+.rename-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }.rename-row input { min-width: 0; border: 1px solid var(--border); border-radius: 10px; padding: 9px 10px; color: var(--text); background: var(--surface); }.manage-members article { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 11px; background: var(--soft); }.manage-members article > span { min-width: 0; flex: 1; display: grid; }.manage-members article button { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--muted); background: var(--surface); cursor: pointer; }.manage-members article button.member-remove { width: auto; grid-auto-flow: column; gap: 4px; padding: 0 7px; color: var(--danger); }.manage-members article button.member-remove span { font-size: 9px; }.manage-members button:disabled,.available-members button:disabled { opacity: .5; cursor: wait; }.crown { color: #d69b16; }.available-members { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 13px; }.available-members > small { flex-basis: 100%; color: var(--muted); }.available-members button { border: 1px solid var(--border); border-radius: 8px; padding: 5px 7px; background: var(--surface); color: var(--text); display: flex; gap: 4px; cursor: pointer; }.manage-feedback,.manage-hint { margin: 0 0 10px; padding: 8px 10px; border-radius: 9px; font-size: 10px; }.manage-feedback.error { color: #a61b2b; background: #fff0f2; }.manage-feedback.success { color: #087d65; background: #eef8f5; }.manage-hint { color: var(--muted); background: var(--soft); }.transfer-admin { margin-top: 4px; display: grid; gap: 8px; }.transfer-admin label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }.transfer-admin select { width: 100%; border: 1px solid var(--border); border-radius: 9px; padding: 8px; color: var(--text); background: var(--surface); }.danger-wide,.dissolve-wide { width: 100%; border-radius: 10px; padding: 9px; display: flex; justify-content: center; align-items: center; gap: 6px; cursor: pointer; }.danger-wide { border: 1px solid #ffcdd3; color: var(--danger); background: #fff5f6; }.dissolve-wide { margin-top: 8px; border: 1px solid var(--danger); color: white; background: var(--danger); }.danger-wide:disabled,.dissolve-wide:disabled { opacity: .5; cursor: wait; }
 @keyframes blink { to { opacity: .25; transform: translateY(-2px); } }
 @media(max-width: 1100px) { .chat-layout { grid-template-columns: 235px 1fr; }.transfer-panel { display: none; } }
 @media(max-width: 700px) { .chat-layout { grid-template-columns: 1fr; grid-template-rows: 82px minmax(0, 1fr); height: 100%; }.conversation-panel { height: 82px; border: 0; border-bottom: 1px solid var(--border); display: block; overflow: hidden; }.message-panel { min-height: 0; }.panel-head { display: none; }.search-box, .new-group, .no-peers { display: none; }.conversation-list { display: flex; padding: 8px 10px; gap: 5px; overflow-x: auto; }.conversation { width: auto; min-width: 54px; padding: 4px 7px; display: grid; justify-items: center; gap: 2px; margin: 0; position: relative; }.conversation :deep(.avatar-wrap), .conversation .room-avatar { width: 38px !important; height: 38px !important; border-radius: 13px; }.conversation-copy strong { max-width: 58px; font-size: 9px; }.conversation-copy small, .conversation .presence { display: none; }.conversation .unread { position: absolute; top: 0; right: 3px; }.message-head { height: 60px; flex: 0 0 60px; padding: 0 14px; }.messages { min-height: 0; padding: 16px 13px; }.message-body { max-width: 82%; }.composer { min-height: 66px; flex: 0 0 66px; padding: 8px 10px; }.compose-action:nth-of-type(2) { display: none; } }

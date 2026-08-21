@@ -149,8 +149,14 @@ async function connectSocket() {
   })
   socket.on('room:removed', (roomId: string) => {
     state.rooms = state.rooms.filter((room) => room.id !== roomId)
+    state.files = state.files.filter((file) => file.roomId !== roomId || file.senderId === identity.id)
+    state.notices = state.notices.filter((notice) => notice.roomId !== roomId)
     delete state.messages[roomId]
+    delete state.unread[roomId]
+    delete state.typing[roomId]
+    delete state.readReceipts[roomId]
     if (state.activeRoomId === roomId) state.activeRoomId = 'lobby'
+    updateDocumentTitle()
   })
   socket.on('message:new', (message: ChatMessage) => { void handleIncomingMessage(message) })
   async function handleIncomingMessage(message: ChatMessage) {
@@ -336,8 +342,14 @@ export function updateGroup(roomId: string, action: 'rename' | 'add' | 'remove' 
   }))
 }
 
-export function leaveGroup(roomId: string) {
-  return new Promise<void>((resolve, reject) => socket?.emit('room:leave', { roomId }, (result: any) => {
+export function leaveGroup(roomId: string, transferTo?: string) {
+  return new Promise<void>((resolve, reject) => socket?.emit('room:leave', { roomId, transferTo }, (result: any) => {
+    if (result?.error) reject(new Error(result.error)); else resolve()
+  }))
+}
+
+export function deleteGroup(roomId: string) {
+  return new Promise<void>((resolve, reject) => socket?.emit('room:delete', { roomId }, (result: any) => {
     if (result?.error) reject(new Error(result.error)); else resolve()
   }))
 }

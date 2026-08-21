@@ -2,6 +2,16 @@
 
 All notable changes are documented here. This project follows semantic versioning.
 
+## [Unreleased]
+
+### Added
+
+- Group administrators can transfer ownership while leaving or dissolve a group for all members.
+
+### Fixed
+
+- Group-management failures are now shown in the interface, and member removal uses an explicit action.
+
 ## [1.1.1] - 2026-08-20
 
 ### Fixed

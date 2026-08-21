@@ -73,6 +73,14 @@ try {
   const reaction = await emit(clientA, 'reaction:toggle', { messageId: replyMessage.message.id, emoji: '👍' })
   const deletion = await emit(clientA, 'message:delete', { messageId: firstMessage.message.id })
 
+  const group = await emit(clientA, 'room:create', { name: `V110 group ${suffix}`, members: [ids.b] })
+  await emit(clientA, 'message:send', { roomId: group.room.id, content: 'Group message removed on dissolve' })
+  const outsiderBlocked = await emit(clientC, 'room:delete', { roomId: group.room.id }).then(() => false, () => true)
+  const transferred = await emit(clientA, 'room:leave', { roomId: group.room.id, transferTo: ids.b })
+  const renamedBySuccessor = await emit(clientB, 'room:update', { roomId: group.room.id, action: 'rename', name: `Successor ${suffix}` })
+  const dissolved = await emit(clientB, 'room:delete', { roomId: group.room.id })
+  const roomsAfterDissolve = await request(`/api/rooms?deviceId=${encodeURIComponent(ids.b)}`, { headers: { 'X-Device-Token': tokens.b } })
+
   const backup = await request('/api/admin/backups', { method: 'POST', headers: { 'X-Admin-Token': setup.body.token } })
   const backupList = await request('/api/admin/backups', { headers: { 'X-Admin-Token': setup.body.token } })
   const backupLink = await request(`/api/admin/backups/${encodeURIComponent(backup.body.name)}/download-link`, { method: 'POST', headers: adminHeaders })
@@ -86,13 +94,17 @@ try {
     share: { first: firstShare.status, second: secondShare.status, revoked: revokedShare.status },
     zip: { status: zipResponse.status, magic: String.fromCharCode(...zipBytes.slice(0, 2)) },
     messages: { reply: replyMessage.message.reply?.content, reaction: reaction.active, deleted: deletion.ok },
+    groups: { transferred: transferred.ok, successorAdmin: renamedBySuccessor.room.admins.includes(ids.b), outsiderBlocked,
+      dissolved: dissolved.ok, deletedMessages: dissolved.deletedMessages, removed: !roomsAfterDissolve.body.some((room) => room.id === group.room.id) },
     backup: { created: backup.response.status, listed: backupList.body.some((item) => item.name === backup.body.name), downloaded: backupDownload.status }
   }
   const valid = result.admin.wrongPassword === 401 && [200, 201].includes(result.admin.setup) && result.admin.auditProtected === 200 &&
     result.approval.pending && result.approval.listed && result.approval.approved && result.upload.wrongChunk === 403 &&
     result.upload.rightChunk === 200 && result.upload.sha256 === 64 && result.share.first === 200 && result.share.second === 403 &&
     result.share.revoked === 403 && result.zip.status === 200 && result.zip.magic === 'PK' && result.messages.reply === 'Smoke root message' &&
-    result.messages.reaction && result.messages.deleted && result.backup.created === 201 && result.backup.listed && result.backup.downloaded === 200
+    result.messages.reaction && result.messages.deleted && result.groups.transferred && result.groups.successorAdmin && result.groups.outsiderBlocked &&
+    result.groups.dissolved && result.groups.deletedMessages === 1 && result.groups.removed && result.backup.created === 201 &&
+    result.backup.listed && result.backup.downloaded === 200
   if (!valid) throw new Error(`v1.1 assertion failed: ${JSON.stringify(result)}`)
   console.log(JSON.stringify(result))
 } finally {

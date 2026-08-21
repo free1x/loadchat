@@ -21,7 +21,7 @@ LoadChat turns one Windows, Linux, or macOS computer into a private chat and fil
 ## Highlights
 
 - **No accounts:** browser-generated device identity, customizable nickname/avatar, live presence, and optional administrator approval.
-- **Real-time chat:** lobby, direct messages, groups, replies, emoji reactions, typing, read receipts, unread badges, recall, search, and browser notifications.
+- **Real-time chat:** lobby, direct messages, groups, replies, emoji reactions, typing, read receipts, unread badges, recall, search, and browser notifications, plus member removal, administrator transfer, leaving, and group dissolution.
 - **Optional text E2EE:** ECDH P-256 plus AES-256-GCM for new direct text messages when both browsers use trusted HTTPS.
 - **Large file transfer:** 4 MiB chunks, parallel/multiple/folder upload, pause/resume, missing-chunk recovery, HTTP Range downloads, progress and speed.
 - **File center:** room-level visibility, in-app image preview, categories/search, SHA-256, multi-select ZIP download, expiring/revocable links, and download limits.

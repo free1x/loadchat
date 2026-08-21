@@ -204,6 +204,18 @@ function isRoomAdmin(roomId: string, deviceId: string) {
   return Boolean(row('SELECT 1 FROM room_members WHERE room_id=? AND device_id=? AND role=?', roomId, deviceId, 'admin'))
 }
 
+function groupRoomDto(roomId: string) {
+  const room = row<any>("SELECT * FROM rooms WHERE id=? AND type='group'", roomId)
+  if (!room) return null
+  const memberships = rows<any>('SELECT device_id,role FROM room_members WHERE room_id=?', roomId)
+  return {
+    id: roomId, name: room.name || '群聊', type: 'group' as const,
+    members: memberships.map((item) => item.device_id),
+    admins: memberships.filter((item) => item.role === 'admin').map((item) => item.device_id),
+    createdAt: Number(room.created_at || 0)
+  }
+}
+
 function requestDeviceId(req: Request) {
   const token = String(req.headers['x-device-token'] || req.query.deviceToken || '')
   const payload = verifyToken(token, 'device')
@@ -849,10 +861,8 @@ io.on('connection', (socket) => {
       } else if (action === 'promote') {
         run("UPDATE room_members SET role='admin' WHERE room_id=? AND device_id=?", roomId, String(payload?.deviceId || ''))
       } else throw new Error('群操作无效')
-      const members = rows<any>('SELECT device_id,role FROM room_members WHERE room_id=?', roomId)
-      const room = row<any>('SELECT * FROM rooms WHERE id=?', roomId)
-      const dto = { id: roomId, name: room?.name || '群聊', type: 'group', members: members.map((item) => item.device_id),
-        admins: members.filter((item) => item.role === 'admin').map((item) => item.device_id), createdAt: Number(room?.created_at || 0) }
+      const dto = groupRoomDto(roomId)
+      if (!dto) throw new Error('群聊不存在')
       emitToRoom(roomId, 'room:updated', dto)
       audit({ socket: { remoteAddress: socket.handshake.address } } as Request, currentDeviceId, `room.${action}`, roomId)
       ack?.({ ok: true, room: dto })
@@ -863,18 +873,66 @@ io.on('connection', (socket) => {
     try {
       if (!currentDeviceId) throw new Error('设备尚未注册')
       const roomId = String(payload?.roomId || '')
+      if (!roomId.startsWith('group:')) throw new Error('只能退出群聊')
       const membership = row<any>('SELECT role FROM room_members WHERE room_id=? AND device_id=?', roomId, currentDeviceId)
       if (!membership) throw new Error('你不在该群聊中')
-      if (membership.role === 'admin') {
-        const admins = Number(row<{ count: number }>("SELECT COUNT(*) count FROM room_members WHERE room_id=? AND role='admin'", roomId)?.count || 0)
-        if (admins <= 1) throw new Error('请先指定另一位群管理员')
+      const transferTo = String(payload?.transferTo || '')
+      db.exec('BEGIN')
+      try {
+        if (membership.role === 'admin') {
+          const admins = Number(row<{ count: number }>("SELECT COUNT(*) count FROM room_members WHERE room_id=? AND role='admin'", roomId)?.count || 0)
+          if (admins <= 1) {
+            if (!transferTo) throw new Error('请选择一位群成员接任管理员，或解散群聊')
+            if (transferTo === currentDeviceId) throw new Error('不能将管理员移交给自己')
+            const successor = row('SELECT 1 FROM room_members WHERE room_id=? AND device_id=?', roomId, transferTo)
+            if (!successor) throw new Error('接任管理员不在该群聊中')
+            run("UPDATE room_members SET role='admin' WHERE room_id=? AND device_id=?", roomId, transferTo)
+          }
+        }
+        run('DELETE FROM room_members WHERE room_id=? AND device_id=?', roomId, currentDeviceId)
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
       }
-      run('DELETE FROM room_members WHERE room_id=? AND device_id=?', roomId, currentDeviceId)
-      void socket.leave(`room:${roomId}`)
-      socket.emit('room:removed', roomId)
-      emitToRoom(roomId, 'room:member-left', { roomId, deviceId: currentDeviceId })
-      ack?.({ ok: true })
+      const dto = groupRoomDto(roomId)
+      for (const memberSocket of io.sockets.sockets.values()) {
+        if (memberSocket.rooms.has(`device:${currentDeviceId}`)) void memberSocket.leave(`room:${roomId}`)
+      }
+      io.to(`device:${currentDeviceId}`).emit('room:removed', roomId)
+      for (const memberId of dto?.members || []) {
+        io.to(`device:${memberId}`).emit('room:updated', dto)
+        io.to(`device:${memberId}`).emit('room:member-left', { roomId, deviceId: currentDeviceId })
+      }
+      audit({ socket: { remoteAddress: socket.handshake.address } } as Request, currentDeviceId, 'room.leave', roomId,
+        transferTo ? { transferredAdminTo: transferTo } : {})
+      ack?.({ ok: true, room: dto })
     } catch (error) { ack?.({ error: error instanceof Error ? error.message : '退出失败' }) }
+  })
+
+  socket.on('room:delete', (payload: any, ack?: (result: unknown) => void) => {
+    try {
+      if (!currentDeviceId) throw new Error('设备尚未注册')
+      const roomId = String(payload?.roomId || '')
+      if (!roomId.startsWith('group:') || !isRoomAdmin(roomId, currentDeviceId)) throw new Error('只有群管理员可以解散群聊')
+      const memberIds = roomRecipients(roomId)
+      const deletedMessages = Number(row<{ count: number }>('SELECT COUNT(*) count FROM messages WHERE room_id=?', roomId)?.count || 0)
+      db.exec('BEGIN')
+      try {
+        run('DELETE FROM read_receipts WHERE room_id=?', roomId)
+        run('DELETE FROM messages WHERE room_id=?', roomId)
+        run('DELETE FROM rooms WHERE id=?', roomId)
+        db.exec('COMMIT')
+      } catch (error) {
+        db.exec('ROLLBACK')
+        throw error
+      }
+      for (const memberId of memberIds) io.to(`device:${memberId}`).emit('room:removed', roomId)
+      for (const memberSocket of io.sockets.sockets.values()) void memberSocket.leave(`room:${roomId}`)
+      audit({ socket: { remoteAddress: socket.handshake.address } } as Request, currentDeviceId, 'room.delete', roomId,
+        { memberCount: memberIds.length, deletedMessages })
+      ack?.({ ok: true, deletedMessages })
+    } catch (error) { ack?.({ error: error instanceof Error ? error.message : '解散失败' }) }
   })
 
   socket.on('rtc:signal', (payload: any) => {
